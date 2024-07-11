@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "griffin"
+version = "0.1.0"
+description = "A fun way to apply my new cuda knowledge and better understand the new wave of RNN's (including state space models)"
+authors = ["saurabh111233212 <saurabh111233212@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+torch = "^2.3.1"
+black = "^24.4.2"
+isort = "^5.13.2"
+packaging = "^24.1"
+ninja = "^1.11.1.1"
+numpy = "^2.0.0"
+wheel = "^0.43.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
