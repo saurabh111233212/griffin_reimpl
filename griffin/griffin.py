@@ -15,7 +15,6 @@ class GriffinConfig:
     n_layers: int = 1
     dim: int = 256
 
-
 class RMSNorm(nn.Module):
     def __init__(self, dim, epsilon=1e-8, bias=False):
         super().__init__()
