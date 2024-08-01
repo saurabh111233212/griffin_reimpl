@@ -15,6 +15,7 @@ class GriffinConfig:
     n_layers: int = 1
     dim: int = 256
 
+
 class RMSNorm(nn.Module):
     def __init__(self, dim, epsilon=1e-8, bias=False):
         super().__init__()
@@ -67,39 +68,41 @@ class GatedMLP(nn.Module):
             self.down_proj.weight.normal_(std=hidden_dim**0.5)
 
 
-# THIS IS WHERE THE CUDA SCAN WILL BE USED
-class TempConv1D(nn.Module):
-    def __init__(self):
-        pass
-
-    def forward(self, x):
-        pass
-
-    def reset_parameters(self):
-        pass
-
-
 # the "real gated linear recurrent unit" (RGLRU)
 class RGLRU(nn.Module):
-    def __init__(self):
+    def __init__(self, hidden_dim: int):
         super().__init__()
+        self.hidden_dim = hidden_dim
+        self.recurrence_gate = nn.Linear(hidden_dim, hidden_dim, bias=False)
+        self.input_gate = nn.Linear(hidden_dim, hidden_dim, bias=False)
+        self.c = 8.0
+        self.lambd = nn.Parameter(torch.empty(self.hidden_dim))
 
-        pass
+        self.reset_parameters()
 
     def forward(self, x):
-        pass
+        r = nn.Sigmoid(self.recurrence_gate(x))  # batch, seq_len, h_dim
+        i = nn.Sigmoid(self.input_gate(x))  # batch, seq_len, h_dim
+        a = torch.pow(nn.Sigmoid(self.lambd), self.c * r)  # batch, seq_len, h_dim
+        # h = a * h_prev + torch.sqrt(1 - a**2) * (i * x) #scan here?? OHHHHH it's a scan sweeping accross t
+        h = scan()
+        # ^  batch, seq_len, h_dim
+
+        return h
 
     def reset_parameters(self):
         pass
 
 
 class RecurrentBlock(nn.Module):
-    def __init__(self, in_dim: int, out_dim, hidden_dim):
+    def __init__(self, in_dim: int, out_dim: int, hidden_dim: int):
         super().__init__()
         self.left_linear = nn.Linear(in_dim, hidden_dim)
         self.gelu = nn.GELU()
         self.right_linear = nn.Linear(in_dim, hidden_dim)
-        self.temp_conv_1d = TempConv1D()
+        self.temp_conv_1d = nn.Conv1d(
+            hidden_dim, hidden_dim, kernel_size=4, groups=hidden_dim, padding=3
+        )
         self.rg_lru = RGLRU()
 
         self.out = nn.Linear(hidden_dim, out_dim)
@@ -135,6 +138,47 @@ class ResidualBlock(nn.Module):
         self.recurrent.reset_parameters()
         self.norm2.reset_parameters()
         self.gated_mlp.reset_parameters()
+
+
+class SlidingGQA(nn.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        head_dim: int,
+        q_heads: int,
+        kv_heads: int,
+        window_size: int,
+    ):
+        super().__init__()
+        self.head_dim = head_dim
+        self.hidden_dim = hidden_dim
+        self.window_size = window_size
+        self.pe = RotaryEmbedding(dim=head_dim)
+        self.q_proj = nn.Linear(hidden_dim, head_dim * q_heads, bias=False)
+        self.kv_proj = nn.Linear(hidden_dim, 2 * head_dim * kv_heads, bias=False)
+        self.out = nn.Linear(hidden_dim, hidden_dim, bias=False)
+        self.reset_parameters()
+
+    def forward(self, x: torch.Tensor):
+        batch_size, seq_len, hidden_dim = x.shape
+        q = self.q_proj(x).view(
+            batch_size, seq_len, -1, self.hidden_dim
+        )  # batch, seq_len, q_heads, hidden_dim
+        kv = self.kv_proj(x).view(
+            batch_size, seq_len, 2, -1, self.hidden_dim
+        )  # batch, seq_len, 2 (one for k and one for v), kv_heads, hidden_dim
+        q, kv = self.pe(q, kv)
+        x = flash_attn_func(
+            q, kv[:, :, 0], causal=True, window_size=(-self.window_size, 0)
+        )
+        x = x.view(batch_size, seq_len, hidden_dim)
+
+        return self.out(x)
+
+    def reset_parameters(self):
+        self.q_proj.weight.normal_(std=self.hidden_dim**-0.5)
+        self.kv_proj.weight.normal_(std=self.hidden_dim**-0.5)
+        self.out.weight.normal_(std=self.hidden_dim**-0.5)
 
 
 class Griffin(nn.Module):
